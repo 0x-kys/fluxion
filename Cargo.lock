@@ -453,12 +453,29 @@ name = "fluxion"
 version = "0.1.0"
 dependencies = [
  "clap",
- "crossterm",
- "ratatui",
- "ropey",
+ "fluxion-core",
+ "fluxion-tui",
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "fluxion-core"
+version = "0.1.0"
+dependencies = [
+ "ropey",
+ "tracing",
+]
+
+[[package]]
+name = "fluxion-tui"
+version = "0.1.0"
+dependencies = [
+ "crossterm",
+ "fluxion-core",
+ "ratatui",
+ "tracing",
 ]
 
 [[package]]
