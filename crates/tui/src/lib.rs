@@ -3,7 +3,7 @@ use crossterm::{
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
-use fluxion_core::Editor;
+use fluxion_core::{Action, Editor};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
@@ -29,50 +29,64 @@ impl Tui {
     }
 
     pub fn run(&mut self, editor: &mut Editor) -> Result<(), Box<dyn Error>> {
-        loop {
+        while !editor.should_quit {
             self.terminal.draw(|f| {
-                let chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .margin(1)
-                    .constraints(
-                        [
-                            Constraint::Percentage(10),
-                            Constraint::Percentage(80),
-                            Constraint::Percentage(10),
-                        ]
-                        .as_ref(),
-                    )
-                    .split(f.area());
-
-                let block = Block::default().title("Block").borders(Borders::ALL);
-                f.render_widget(block, chunks[0]);
-
-                let content = editor.text.to_string();
-                let paragraph = Paragraph::new(content)
-                    .style(Style::default().fg(Color::Cyan))
-                    .alignment(Alignment::Center)
-                    .block(
-                        Block::default()
-                            .borders(Borders::ALL)
-                            .title("Fluxion Editor")
-                            .border_style(Style::default().fg(Color::White)),
-                    );
-                f.render_widget(paragraph, chunks[1]);
-
-                let footer = Paragraph::new("Press 'q' to quit")
-                    .style(Style::default().fg(Color::Yellow))
-                    .alignment(Alignment::Center);
-                f.render_widget(footer, chunks[2]);
+                Self::render_ui(f, editor);
             })?;
 
-            if event::poll(std::time::Duration::from_millis(100))? {
+            if event::poll(std::time::Duration::from_millis(16))? {
                 if let Event::Key(key) = event::read()? {
-                    if let KeyCode::Char('q') = key.code {
-                        return Ok(());
-                    }
+                    let action = self.map_key_to_action(key);
+                    editor.handle_action(action);
                 }
             }
         }
+
+        Ok(())
+    }
+
+    fn map_key_to_action(&self, key: event::KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Esc => Action::Quit,
+            KeyCode::Char(c) => Action::Insert(c),
+            KeyCode::Backspace => Action::Delete,
+            _ => Action::NoOp,
+        }
+    }
+
+    fn render_ui(f: &mut ratatui::Frame, editor: &Editor) {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .margin(1)
+            .constraints(
+                [
+                    Constraint::Percentage(5),
+                    Constraint::Percentage(94),
+                    Constraint::Percentage(1),
+                ]
+                .as_ref(),
+            )
+            .split(f.area());
+
+        let block = Block::default().title("Block").borders(Borders::ALL);
+        f.render_widget(block, chunks[0]);
+
+        let content = editor.text.to_string();
+        let paragraph = Paragraph::new(content)
+            .style(Style::default().fg(Color::Cyan))
+            .alignment(Alignment::Left)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Fluxion Editor")
+                    .border_style(Style::default().fg(Color::White)),
+            );
+        f.render_widget(paragraph, chunks[1]);
+
+        let footer = Paragraph::new("Press 'Esc' to quit")
+            .style(Style::default().fg(Color::Yellow))
+            .alignment(Alignment::Center);
+        f.render_widget(footer, chunks[2]);
     }
 }
 
