@@ -11,6 +11,7 @@ pub enum Action {
 pub struct Editor {
     pub text: Rope,
     pub cursor: usize,
+    pub scroll_offset: usize,
     pub should_quit: bool,
 }
 
@@ -19,6 +20,7 @@ impl Editor {
         Self {
             text: Rope::from_str(initial_text),
             cursor: 0,
+            scroll_offset: 0,
             should_quit: false,
         }
     }

@@ -9,7 +9,7 @@ use ratatui::{
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Style},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 use std::{error::Error, io};
 
@@ -71,8 +71,20 @@ impl Tui {
         let block = Block::default().title("Block").borders(Borders::ALL);
         f.render_widget(block, chunks[0]);
 
-        let content = editor.text.to_string();
-        let paragraph = Paragraph::new(content)
+        let area = chunks[1];
+        let max_lines = area.height as usize;
+        let mut visible_text = String::new();
+
+        let start_line = editor.scroll_offset;
+        let end_line = (start_line + max_lines).min(editor.text.len_lines());
+
+        for i in start_line..end_line {
+            let line = editor.text.line(i);
+            visible_text.push_str(&line.to_string());
+        }
+
+        let paragraph = Paragraph::new(visible_text)
+            .wrap(Wrap { trim: false })
             .style(Style::default().fg(Color::Cyan))
             .alignment(Alignment::Left)
             .block(

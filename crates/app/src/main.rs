@@ -19,7 +19,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     info!("Starting Fluxion with args: {:?}", args);
 
-    let mut editor = Editor::new("Hello World from Fluxion!");
+    let mut editor = Editor::new("");
 
     let mut tui = Tui::new()?;
     tui.run(&mut editor)?;
