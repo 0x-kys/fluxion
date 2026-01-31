@@ -7,10 +7,10 @@ use fluxion_core::{Action, Editor, Mode};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout},
-    style::{Color, Style},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use std::{error::Error, io};
 
@@ -52,18 +52,31 @@ impl Tui {
             Mode::Insert => self.map_insert_mode(key),
             Mode::Visual => self.map_visual_mode(key),
             Mode::Command => self.map_command_mode(key, editor),
+            Mode::BufferList => self.map_buffer_list_mode(key, editor),
+            Mode::SaveDialog => self.map_save_dialog_mode(key, editor),
         }
     }
 
     fn map_normal_mode(&self, key: event::KeyEvent) -> Action {
         match key.code {
             KeyCode::Char(':') => Action::EnterCommandMode,
+            KeyCode::Char('b') => Action::ListBuffers,
             KeyCode::Char('h') => Action::MoveLeft,
             KeyCode::Char('j') => Action::MoveDown,
             KeyCode::Char('k') => Action::MoveUp,
             KeyCode::Char('l') => Action::MoveRight,
             KeyCode::Char('i') => Action::EnterInsertMode,
             KeyCode::Char('v') => Action::EnterVisualMode,
+            KeyCode::Char('1') => Action::SwitchBuffer(1),
+            KeyCode::Char('2') => Action::SwitchBuffer(2),
+            KeyCode::Char('3') => Action::SwitchBuffer(3),
+            KeyCode::Char('4') => Action::SwitchBuffer(4),
+            KeyCode::Char('5') => Action::SwitchBuffer(5),
+            KeyCode::Char('6') => Action::SwitchBuffer(6),
+            KeyCode::Char('7') => Action::SwitchBuffer(7),
+            KeyCode::Char('8') => Action::SwitchBuffer(8),
+            KeyCode::Char('9') => Action::SwitchBuffer(9),
+            KeyCode::Char('0') => Action::SwitchBuffer(0),
             _ => Action::NoOp,
         }
     }
@@ -102,81 +115,187 @@ impl Tui {
         }
     }
 
+    fn map_buffer_list_mode(&self, key: event::KeyEvent, _editor: &mut Editor) -> Action {
+        match key.code {
+            KeyCode::Esc => Action::EnterNormalMode,
+            KeyCode::Char('1') => Action::SwitchBuffer(1),
+            KeyCode::Char('2') => Action::SwitchBuffer(2),
+            KeyCode::Char('3') => Action::SwitchBuffer(3),
+            KeyCode::Char('4') => Action::SwitchBuffer(4),
+            KeyCode::Char('5') => Action::SwitchBuffer(5),
+            KeyCode::Char('6') => Action::SwitchBuffer(6),
+            KeyCode::Char('7') => Action::SwitchBuffer(7),
+            KeyCode::Char('8') => Action::SwitchBuffer(8),
+            KeyCode::Char('9') => Action::SwitchBuffer(9),
+            KeyCode::Char('0') => Action::SwitchBuffer(0),
+            KeyCode::Char('n') => Action::NextBuffer,
+            KeyCode::Char('p') => Action::PrevBuffer,
+            _ => Action::NoOp,
+        }
+    }
+
+    fn map_save_dialog_mode(&self, key: event::KeyEvent, editor: &mut Editor) -> Action {
+        match key.code {
+            KeyCode::Esc => Action::CancelDialog,
+            KeyCode::Enter => {
+                let filename = editor.command_input.clone();
+                if !filename.is_empty() {
+                    Action::SaveBufferAs(Some(std::path::PathBuf::from(filename)))
+                } else {
+                    Action::CancelDialog
+                }
+            }
+            KeyCode::Backspace => Action::DeleteFromCommand,
+            KeyCode::Char(c) => {
+                editor.insert_into_command(c);
+                Action::NoOp
+            }
+            _ => Action::NoOp,
+        }
+    }
+
     fn render_ui(f: &mut ratatui::Frame, editor: &Editor) {
         let vertical_chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
             .constraints(
                 [
-                    Constraint::Percentage(5),
-                    Constraint::Percentage(3),
-                    Constraint::Percentage(92),
+                    Constraint::Length(3),
+                    Constraint::Length(3),
+                    Constraint::Min(0),
+                    Constraint::Length(3),
                 ]
                 .as_ref(),
             )
             .split(f.area());
 
+        Self::render_header(f, editor, vertical_chunks[0]);
+        Self::render_status(f, editor, vertical_chunks[1]);
+        Self::render_buffer_list(f, editor, vertical_chunks[3]);
+        Self::render_main_editor(f, editor, vertical_chunks[2]);
+
+        if editor.mode == Mode::SaveDialog {
+            Self::render_save_dialog(f, editor, f.area());
+        }
+    }
+
+    fn render_header(f: &mut ratatui::Frame, editor: &Editor, area: Rect) {
         let mode_text = match editor.mode {
             Mode::Normal => "NORMAL",
             Mode::Insert => "INSERT",
             Mode::Visual => "VISUAL",
             Mode::Command => "COMMAND",
+            Mode::BufferList => "BUFFER LIST",
+            Mode::SaveDialog => "SAVE AS",
         };
 
-        let header = Paragraph::new(format!("MODE: {}", mode_text))
-            .style(Style::default().fg(Color::Green))
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .title("Fluxion Editor")
-                    .border_style(Style::default().fg(Color::White)),
-            );
-        f.render_widget(header, vertical_chunks[0]);
+        let title = if editor.is_current_dirty() {
+            format!("* {} - Fluxion", editor.get_current_title())
+        } else {
+            format!("{} - Fluxion", editor.get_current_title())
+        };
 
+        let header = Paragraph::new(Line::from(vec![
+            Span::styled(
+                format!(" MODE: {} ", mode_text),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(title, Style::default().fg(Color::White)),
+        ]))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title("Fluxion Editor")
+                .border_style(Style::default().fg(Color::White)),
+        );
+        f.render_widget(header, area);
+    }
+
+    fn render_status(f: &mut ratatui::Frame, editor: &Editor, area: Rect) {
         let mode_help = match editor.mode {
-            Mode::Normal => "i=insert, v=visual, :=command",
-            Mode::Insert => "Esc=normal mode",
-            Mode::Visual => "Esc=normal mode",
-            Mode::Command => "Esc=cancel, Enter=execute",
+            Mode::Normal => ":cmd i=ins v=vis b=buf 0-9=switch",
+            Mode::Insert => "Esc=normal",
+            Mode::Visual => "Esc=normal",
+            Mode::Command => "Enter=exec Esc=cancel",
+            Mode::BufferList => "Esc=close 0-9=switch n=next p=prev",
+            Mode::SaveDialog => "Enter=save Esc=cancel",
         };
 
         let status_text = if editor.mode == Mode::Command {
             format!(":{}", editor.command_input)
+        } else if editor.mode == Mode::SaveDialog {
+            format!("Save as: {}", editor.command_input)
         } else {
             mode_help.to_string()
         };
 
         let status_area = Paragraph::new(status_text)
-            .style(if editor.mode == Mode::Command {
-                Style::default().fg(Color::Cyan)
-            } else {
-                Style::default().fg(Color::Yellow)
-            })
+            .style(
+                if editor.mode == Mode::Command || editor.mode == Mode::SaveDialog {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default().fg(Color::Yellow)
+                },
+            )
             .alignment(Alignment::Center)
             .block(Block::default().borders(Borders::ALL));
-        f.render_widget(status_area, vertical_chunks[1]);
+        f.render_widget(status_area, area);
+    }
 
-        let main_area = vertical_chunks[2];
+    fn render_buffer_list(f: &mut ratatui::Frame, editor: &Editor, area: Rect) {
+        let buffers = editor.get_buffers();
+        let current_id = editor.buffer_manager.current_buffer_id();
+        let mut buffer_items: Vec<Line> = Vec::new();
+
+        for buffer in buffers {
+            let is_current = buffer.id == current_id;
+            let indicator = if is_current { " [*] " } else { "     " };
+            let dirty_mark = if buffer.dirty { " (+)" } else { "" };
+            let buffer_text = format!(
+                "{}[ {} ] {}{}",
+                indicator, buffer.id, buffer.title, dirty_mark
+            );
+            buffer_items.push(Line::from(buffer_text));
+        }
+
+        let buffer_list = Paragraph::new(buffer_items)
+            .style(Style::default().fg(Color::Cyan))
+            .block(Block::default().borders(Borders::ALL).title("Buffers"));
+        f.render_widget(buffer_list, area);
+    }
+
+    fn render_main_editor(f: &mut ratatui::Frame, editor: &Editor, area: Rect) {
         let horizontal_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([Constraint::Length(8), Constraint::Min(0)].as_ref())
-            .split(main_area);
+            .constraints([Constraint::Length(6), Constraint::Min(0)].as_ref())
+            .split(area);
 
         let line_numbers_area = horizontal_chunks[0];
         let text_area = horizontal_chunks[1];
 
-        let max_lines = main_area.height.saturating_sub(2) as usize;
+        let text = editor.get_current_text();
+        let max_lines = area.height.saturating_sub(2) as usize;
         let start_line = editor.scroll_offset;
-        let end_line = (start_line + max_lines).min(editor.text.len_lines());
+        let end_line = (start_line + max_lines).min(text.len_lines());
 
         let line_number_style = Style::default().fg(Color::Gray);
         let mut line_number_lines: Vec<Line> = Vec::new();
 
         for i in start_line..end_line {
-            let relative_line_num = i.abs_diff(editor.cursor.row);
+            let line_num = i + 1;
+            let style = if i == editor.cursor.row {
+                line_number_style
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                line_number_style
+            };
             line_number_lines.push(Line::from(vec![Span::styled(
-                format!("{:>4}", relative_line_num),
-                line_number_style,
+                format!("{:>4}", line_num),
+                style,
             )]));
         }
 
@@ -187,7 +306,7 @@ impl Tui {
 
         let mut text_lines: Vec<Line> = Vec::new();
         for i in start_line..end_line {
-            let line = editor.text.line(i);
+            let line = text.line(i);
             text_lines.push(Line::from(line.to_string()));
         }
 
@@ -213,13 +332,50 @@ impl Tui {
         }
 
         if editor.mode == Mode::Command {
-            let cursor_pos = editor.command_input.len() as u16 + 1;
-            if cursor_pos + 2 < vertical_chunks[1].width {
-                f.set_cursor_position((
-                    vertical_chunks[1].x + cursor_pos,
-                    vertical_chunks[1].y + 1,
-                ));
+            let cursor_pos = editor.command_input.len() as u16 + 2;
+            if cursor_pos + 2 < text_area.width {
+                f.set_cursor_position((text_area.x + cursor_pos, text_area.y + 1));
             }
+        }
+    }
+
+    fn render_save_dialog(f: &mut ratatui::Frame, editor: &Editor, area: Rect) {
+        let dialog_width = 50.min(area.width.saturating_sub(4));
+        let dialog_height = 6;
+        let x = (area.width - dialog_width) / 2;
+        let y = (area.height - dialog_height) / 2;
+
+        let dialog_area = Rect::new(x, y, dialog_width, dialog_height);
+
+        let dialog_content = vec![
+            Line::from("Save As"),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("> ", Style::default().fg(Color::Green)),
+                Span::styled(
+                    editor.command_input.clone(),
+                    Style::default().fg(Color::White),
+                ),
+            ]),
+            Line::from(""),
+            Line::from("Enter to save, Esc to cancel"),
+        ];
+
+        let dialog = Paragraph::new(dialog_content)
+            .style(Style::default().fg(Color::Cyan))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title_style(Style::default().fg(Color::Yellow)),
+            )
+            .alignment(Alignment::Center);
+
+        f.render_widget(Clear, dialog_area);
+        f.render_widget(dialog, dialog_area);
+
+        let cursor_pos = (editor.command_input.len() + 2) as u16;
+        if cursor_pos < dialog_area.width - 2 {
+            f.set_cursor_position((dialog_area.x + cursor_pos, dialog_area.y + 2));
         }
     }
 }
