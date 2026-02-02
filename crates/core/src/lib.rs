@@ -1,229 +1,15 @@
 use ropey::Rope;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Cursor {
-    pub row: usize,
-    pub col: usize,
-}
+mod buffer;
+mod cursor;
+mod file_picker;
+mod mode;
 
-impl Cursor {
-    pub fn new(row: usize, col: usize) -> Self {
-        Self { row, col }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Mode {
-    Normal,
-    Insert,
-    Visual,
-    Command,
-    BufferList,
-    SaveDialog,
-}
-
-#[derive(Debug, Clone)]
-pub struct Buffer {
-    pub id: usize,
-    pub text: Rope,
-    pub path: Option<PathBuf>,
-    pub title: String,
-    pub dirty: bool,
-    pub is_transient: bool,
-}
-
-#[derive(Debug)]
-pub struct BufferManager {
-    buffers: Vec<Buffer>,
-    current_buffer_id: usize,
-    next_id: usize,
-}
-
-impl BufferManager {
-    pub fn new() -> Self {
-        let initial_buffer = Buffer {
-            id: 0,
-            text: Rope::from_str(""),
-            path: None,
-            title: "[No Name]".to_string(),
-            dirty: false,
-            is_transient: false,
-        };
-        Self {
-            buffers: vec![initial_buffer],
-            current_buffer_id: 0,
-            next_id: 1,
-        }
-    }
-
-    pub fn new_buffer(&mut self) -> usize {
-        let id = self.next_id;
-        self.next_id += 1;
-
-        let buffer = Buffer {
-            id,
-            text: Rope::from_str(""),
-            path: None,
-            title: format!("[Buffer {}]", id),
-            dirty: false,
-            is_transient: false,
-        };
-
-        self.buffers.push(buffer);
-        id
-    }
-
-    pub fn open_file(&mut self, path: PathBuf) -> Result<usize, Box<dyn std::error::Error>> {
-        let contents = std::fs::read_to_string(&path)?;
-        let title = path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("[Untitled]");
-
-        let id = self.next_id;
-        self.next_id += 1;
-
-        let buffer = Buffer {
-            id,
-            text: Rope::from_str(&contents),
-            path: Some(path.clone()),
-            title: title.to_string(),
-            dirty: false,
-            is_transient: false,
-        };
-
-        self.buffers.push(buffer);
-        Ok(id)
-    }
-
-    pub fn current_buffer(&self) -> &Buffer {
-        self.buffers
-            .iter()
-            .find(|b| b.id == self.current_buffer_id)
-            .expect("Current buffer should exist")
-    }
-
-    pub fn current_buffer_mut(&mut self) -> &mut Buffer {
-        self.buffers
-            .iter_mut()
-            .find(|b| b.id == self.current_buffer_id)
-            .expect("Current buffer should exist")
-    }
-
-    pub fn switch_to(&mut self, id: usize) -> bool {
-        if self.buffers.iter().any(|b| b.id == id) {
-            if let Some(current) = self.buffers.iter().find(|b| b.id == self.current_buffer_id)
-                && current.is_transient
-            {
-                self.delete_buffer(self.current_buffer_id);
-            }
-            self.current_buffer_id = id;
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn next_buffer(&mut self) -> Option<usize> {
-        let current_idx = self
-            .buffers
-            .iter()
-            .position(|b| b.id == self.current_buffer_id)?;
-
-        let next_idx = (current_idx + 1) % self.buffers.len();
-        Some(self.buffers[next_idx].id)
-    }
-
-    pub fn prev_buffer(&mut self) -> Option<usize> {
-        let current_idx = self
-            .buffers
-            .iter()
-            .position(|b| b.id == self.current_buffer_id)?;
-
-        let prev_idx = if current_idx == 0 {
-            self.buffers.len() - 1
-        } else {
-            current_idx - 1
-        };
-        Some(self.buffers[prev_idx].id)
-    }
-
-    pub fn delete_buffer(&mut self, id: usize) -> bool {
-        if let Some(pos) = self.buffers.iter().position(|b| b.id == id) {
-            self.buffers.remove(pos);
-
-            if self.buffers.is_empty() {
-                self.buffers.push(Buffer {
-                    id: self.next_id,
-                    text: Rope::from_str(""),
-                    path: None,
-                    title: "[No Name]".to_string(),
-                    dirty: false,
-                    is_transient: false,
-                });
-                self.next_id += 1;
-                self.current_buffer_id = 0;
-            } else if self.current_buffer_id == id {
-                self.current_buffer_id = self.buffers[0].id;
-            }
-            true
-        } else {
-            false
-        }
-    }
-
-    pub fn save_current(
-        &mut self,
-        path: Option<PathBuf>,
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let buffer = self.current_buffer_mut();
-        let data = buffer.text.to_string();
-        let save_path = path.unwrap_or_else(|| {
-            buffer
-                .path
-                .as_ref()
-                .map(|p| {
-                    if let Some(parent) = p.parent() {
-                        if let Some(filename) = p.file_name() {
-                            parent.join(filename)
-                        } else {
-                            p.clone()
-                        }
-                    } else {
-                        PathBuf::from(format!("untitled_{}.txt", buffer.id))
-                    }
-                })
-                .unwrap_or_else(|| PathBuf::from(format!("untitled_{}.txt", buffer.id)))
-        });
-
-        std::fs::write(&save_path, data.as_bytes())?;
-
-        buffer.dirty = false;
-        buffer.path = Some(save_path.clone());
-        buffer.title = save_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("[Untitled]")
-            .to_string();
-
-        Ok(())
-    }
-
-    pub fn list_buffers(&self) -> Vec<&Buffer> {
-        self.buffers.iter().filter(|b| !b.is_transient).collect()
-    }
-
-    pub fn current_buffer_id(&self) -> usize {
-        self.current_buffer_id
-    }
-}
-
-impl Default for BufferManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+pub use buffer::{Buffer, BufferManager};
+pub use cursor::Cursor;
+pub use file_picker::{FileInfo, FilePicker};
+pub use mode::Mode;
 
 pub enum Action {
     Quit,
@@ -235,6 +21,7 @@ pub enum Action {
     MoveDown,
     MoveLeft,
     MoveRight,
+    CancelKeySequence,
     EnterInsertMode,
     EnterNormalMode,
     EnterVisualMode,
@@ -243,9 +30,16 @@ pub enum Action {
     SwitchBuffer(usize),
     NextBuffer,
     PrevBuffer,
-    ListBuffers,
+    CloseBuffer,
+    CloseAllBuffersExcept,
     SaveBuffer,
     SaveBufferAs(Option<PathBuf>),
+    EnterFilePicker,
+    SelectFile(String),
+    FilePickerUp,
+    FilePickerDown,
+    FilePickerEnter,
+    FilePickerEsc,
     OpenFile(String),
     CancelDialog,
 }
@@ -258,6 +52,7 @@ pub struct Editor {
     pub should_quit: bool,
     pub mode: Mode,
     pub command_input: String,
+    pub file_picker: FilePicker,
 }
 
 impl Editor {
@@ -269,6 +64,7 @@ impl Editor {
             should_quit: false,
             mode: Mode::Normal,
             command_input: String::new(),
+            file_picker: FilePicker::new(),
         }
     }
 
@@ -394,8 +190,14 @@ impl Editor {
                     self.cursor = Cursor::new(0, 0);
                 }
             }
-            Action::ListBuffers => {
-                self.mode = Mode::BufferList;
+            Action::CloseBuffer => {
+                if let Some(_new_id) = self.buffer_manager.delete_current() {
+                    self.cursor = Cursor::new(0, 0);
+                }
+            }
+            Action::CloseAllBuffersExcept => {
+                let current_id = self.buffer_manager.current_buffer_id();
+                self.buffer_manager.delete_all_except(current_id);
             }
             Action::SaveBuffer => {
                 let buffer = self.buffer_manager.current_buffer();
@@ -422,6 +224,44 @@ impl Editor {
             Action::CancelDialog => {
                 self.mode = Mode::Normal;
                 self.command_input.clear();
+            }
+            Action::CancelKeySequence => {}
+            Action::EnterFilePicker => {
+                self.mode = Mode::FilePicker;
+                self.init_file_picker();
+            }
+            Action::SelectFile(path) => {
+                let path_buf = PathBuf::from(path);
+                if let Ok(id) = self.buffer_manager.open_file(path_buf)
+                    && self.buffer_manager.switch_to(id)
+                {
+                    self.cursor = Cursor::new(0, 0);
+                }
+                self.mode = Mode::Normal;
+            }
+            Action::FilePickerUp => {
+                self.file_picker_up();
+            }
+            Action::FilePickerDown => {
+                self.file_picker_down();
+            }
+            Action::FilePickerEnter => {
+                if let Some(file) = self.file_picker.selected_file() {
+                    if file.is_dir {
+                        self.file_picker.current_dir = file.path.clone();
+                        self.file_picker.refresh();
+                        self.file_picker.selected_idx = 0;
+                    } else if let Ok(id) = self.buffer_manager.open_file(file.path.clone())
+                        // INFO: .clone() here can be replaced with something else as we are giving up on perf here.
+                        && self.buffer_manager.switch_to(id)
+                    {
+                        self.cursor = Cursor::new(0, 0);
+                        self.mode = Mode::Normal;
+                    }
+                }
+            }
+            Action::FilePickerEsc => {
+                self.mode = Mode::Normal;
             }
             Action::NoOp => {}
         }
@@ -483,20 +323,26 @@ impl Editor {
                 self.should_quit = true;
             }
             Some("!q") => self.should_quit = true,
-            Some("b") => {
-                self.mode = Mode::BufferList;
-                self.command_input.clear();
-                return;
-            }
             Some("bn") | Some("bnext") => {
                 if let Some(id) = self.buffer_manager.next_buffer() {
                     let _ = self.buffer_manager.switch_to(id);
+                    self.cursor = Cursor::new(0, 0);
                 }
             }
             Some("bp") | Some("bprev") => {
                 if let Some(id) = self.buffer_manager.prev_buffer() {
                     let _ = self.buffer_manager.switch_to(id);
+                    self.cursor = Cursor::new(0, 0);
                 }
+            }
+            Some("bx") | Some("bc") | Some("bclose") => {
+                if let Some(_new_id) = self.buffer_manager.delete_current() {
+                    self.cursor = Cursor::new(0, 0);
+                }
+            }
+            Some("baex") | Some("ballbutexcept") => {
+                let current_id = self.buffer_manager.current_buffer_id();
+                self.buffer_manager.delete_all_except(current_id);
             }
             Some("e") => {
                 if let Some(filename) = parts.get(1) {
@@ -523,5 +369,36 @@ impl Editor {
 
     pub fn insert_into_command(&mut self, c: char) {
         self.command_input.push(c);
+    }
+
+    pub fn init_file_picker(&mut self) {
+        self.file_picker.refresh();
+    }
+
+    pub fn file_picker_up(&mut self) {
+        self.file_picker.move_up();
+    }
+
+    pub fn file_picker_down(&mut self) {
+        self.file_picker.move_down();
+    }
+
+    pub fn file_picker_select(&mut self) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+        if let Some(file) = self.file_picker.selected_file() {
+            Ok(Some(file.path.clone()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    pub fn file_picker_navigate(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(file) = self.file_picker.selected_file()
+            && file.is_dir
+        {
+            self.file_picker.current_dir = file.path.clone();
+            self.file_picker.refresh();
+            self.file_picker.selected_idx = 0;
+        }
+        Ok(())
     }
 }

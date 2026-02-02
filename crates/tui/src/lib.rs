@@ -52,21 +52,22 @@ impl Tui {
             Mode::Insert => self.map_insert_mode(key),
             Mode::Visual => self.map_visual_mode(key),
             Mode::Command => self.map_command_mode(key, editor),
-            Mode::BufferList => self.map_buffer_list_mode(key, editor),
             Mode::SaveDialog => self.map_save_dialog_mode(key, editor),
+            Mode::FilePicker => self.map_file_picker_mode(key),
         }
     }
 
     fn map_normal_mode(&self, key: event::KeyEvent) -> Action {
         match key.code {
             KeyCode::Char(':') => Action::EnterCommandMode,
-            KeyCode::Char('b') => Action::ListBuffers,
             KeyCode::Char('h') => Action::MoveLeft,
             KeyCode::Char('j') => Action::MoveDown,
             KeyCode::Char('k') => Action::MoveUp,
             KeyCode::Char('l') => Action::MoveRight,
             KeyCode::Char('i') => Action::EnterInsertMode,
             KeyCode::Char('v') => Action::EnterVisualMode,
+            KeyCode::Char('[') => Action::PrevBuffer,
+            KeyCode::Char(']') => Action::NextBuffer,
             KeyCode::Char('1') => Action::SwitchBuffer(1),
             KeyCode::Char('2') => Action::SwitchBuffer(2),
             KeyCode::Char('3') => Action::SwitchBuffer(3),
@@ -77,6 +78,7 @@ impl Tui {
             KeyCode::Char('8') => Action::SwitchBuffer(8),
             KeyCode::Char('9') => Action::SwitchBuffer(9),
             KeyCode::Char('0') => Action::SwitchBuffer(0),
+            KeyCode::Char(' ') => Action::EnterFilePicker,
             _ => Action::NoOp,
         }
     }
@@ -115,25 +117,6 @@ impl Tui {
         }
     }
 
-    fn map_buffer_list_mode(&self, key: event::KeyEvent, _editor: &mut Editor) -> Action {
-        match key.code {
-            KeyCode::Esc => Action::EnterNormalMode,
-            KeyCode::Char('1') => Action::SwitchBuffer(1),
-            KeyCode::Char('2') => Action::SwitchBuffer(2),
-            KeyCode::Char('3') => Action::SwitchBuffer(3),
-            KeyCode::Char('4') => Action::SwitchBuffer(4),
-            KeyCode::Char('5') => Action::SwitchBuffer(5),
-            KeyCode::Char('6') => Action::SwitchBuffer(6),
-            KeyCode::Char('7') => Action::SwitchBuffer(7),
-            KeyCode::Char('8') => Action::SwitchBuffer(8),
-            KeyCode::Char('9') => Action::SwitchBuffer(9),
-            KeyCode::Char('0') => Action::SwitchBuffer(0),
-            KeyCode::Char('n') => Action::NextBuffer,
-            KeyCode::Char('p') => Action::PrevBuffer,
-            _ => Action::NoOp,
-        }
-    }
-
     fn map_save_dialog_mode(&self, key: event::KeyEvent, editor: &mut Editor) -> Action {
         match key.code {
             KeyCode::Esc => Action::CancelDialog,
@@ -154,28 +137,47 @@ impl Tui {
         }
     }
 
+    fn map_file_picker_mode(&self, key: event::KeyEvent) -> Action {
+        match key.code {
+            KeyCode::Esc => Action::FilePickerEsc,
+            KeyCode::Enter => Action::FilePickerEnter,
+            KeyCode::Char('j') => Action::FilePickerDown,
+            KeyCode::Char('k') => Action::FilePickerUp,
+            _ => Action::NoOp,
+        }
+    }
+
     fn render_ui(f: &mut ratatui::Frame, editor: &Editor) {
         let vertical_chunks = Layout::default()
             .direction(Direction::Vertical)
             .margin(1)
             .constraints(
                 [
-                    Constraint::Length(3),
+                    Constraint::Length(1),
+                    Constraint::Length(2),
                     Constraint::Length(3),
                     Constraint::Min(0),
-                    Constraint::Length(3),
                 ]
                 .as_ref(),
             )
             .split(f.area());
 
-        Self::render_header(f, editor, vertical_chunks[0]);
-        Self::render_status(f, editor, vertical_chunks[1]);
-        Self::render_buffer_list(f, editor, vertical_chunks[3]);
-        Self::render_main_editor(f, editor, vertical_chunks[2]);
+        let bufferline_area = vertical_chunks[0];
+        let header_area = vertical_chunks[1];
+        let status_area = vertical_chunks[2];
+        let main_editor_area = vertical_chunks[3];
+
+        Self::render_bufferline(f, editor, bufferline_area);
+        Self::render_header(f, editor, header_area);
+        Self::render_status(f, editor, status_area);
+        Self::render_main_editor(f, editor, main_editor_area, status_area);
 
         if editor.mode == Mode::SaveDialog {
             Self::render_save_dialog(f, editor, f.area());
+        }
+
+        if editor.mode == Mode::FilePicker {
+            Self::render_file_picker(f, editor, f.area());
         }
     }
 
@@ -185,8 +187,8 @@ impl Tui {
             Mode::Insert => "INSERT",
             Mode::Visual => "VISUAL",
             Mode::Command => "COMMAND",
-            Mode::BufferList => "BUFFER LIST",
             Mode::SaveDialog => "SAVE AS",
+            Mode::FilePicker => "FILE PICKER",
         };
 
         let title = if editor.is_current_dirty() {
@@ -216,12 +218,12 @@ impl Tui {
 
     fn render_status(f: &mut ratatui::Frame, editor: &Editor, area: Rect) {
         let mode_help = match editor.mode {
-            Mode::Normal => ":cmd i=ins v=vis b=buf 0-9=switch",
+            Mode::Normal => ":cmd i=ins v=vis ]/[/=prev/next Space+f=file",
             Mode::Insert => "Esc=normal",
             Mode::Visual => "Esc=normal",
             Mode::Command => "Enter=exec Esc=cancel",
-            Mode::BufferList => "Esc=close 0-9=switch n=next p=prev",
             Mode::SaveDialog => "Enter=save Esc=cancel",
+            Mode::FilePicker => "Enter=open j/k=navigate Esc=cancel",
         };
 
         let status_text = if editor.mode == Mode::Command {
@@ -240,34 +242,62 @@ impl Tui {
                     Style::default().fg(Color::Yellow)
                 },
             )
-            .alignment(Alignment::Center)
+            .alignment(Alignment::Left)
             .block(Block::default().borders(Borders::ALL));
         f.render_widget(status_area, area);
     }
 
-    fn render_buffer_list(f: &mut ratatui::Frame, editor: &Editor, area: Rect) {
+    fn render_bufferline(f: &mut ratatui::Frame, editor: &Editor, area: Rect) {
         let buffers = editor.get_buffers();
         let current_id = editor.buffer_manager.current_buffer_id();
-        let mut buffer_items: Vec<Line> = Vec::new();
+
+        let mut buffer_spans: Vec<Span> = Vec::new();
+        let mut current_width = 0;
 
         for buffer in buffers {
             let is_current = buffer.id == current_id;
-            let indicator = if is_current { " [*] " } else { "     " };
-            let dirty_mark = if buffer.dirty { " (+)" } else { "" };
-            let buffer_text = format!(
-                "{}[ {} ] {}{}",
-                indicator, buffer.id, buffer.title, dirty_mark
-            );
-            buffer_items.push(Line::from(buffer_text));
+            let dirty_mark = if buffer.dirty { " [+]" } else { "" };
+            let buffer_text = format!(" {}:{}{}", buffer.id, buffer.title, dirty_mark);
+            current_width += 2 + buffer_text.chars().count();
+
+            let style = if is_current {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            };
+
+            buffer_spans.push(Span::styled(" | ", Style::default().fg(Color::DarkGray)));
+            buffer_spans.push(Span::styled(buffer_text, style));
         }
 
-        let buffer_list = Paragraph::new(buffer_items)
-            .style(Style::default().fg(Color::Cyan))
-            .block(Block::default().borders(Borders::ALL).title("Buffers"));
-        f.render_widget(buffer_list, area);
+        buffer_spans.push(Span::styled(" |", Style::default().fg(Color::DarkGray)));
+
+        let bufferline = Line::from(buffer_spans);
+
+        let mut display_line = bufferline.clone();
+        if current_width > area.width as usize {
+            let truncated_text = bufferline
+                .spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>();
+            let ellipsis = "...|";
+            let available = area.width.saturating_sub(ellipsis.len() as u16) as usize;
+            display_line = Line::from(format!(
+                "{}{}",
+                &truncated_text[..available.min(truncated_text.len())],
+                ellipsis
+            ));
+        }
+
+        let bufferline_widget =
+            Paragraph::new(display_line).style(Style::default().fg(Color::Cyan));
+        f.render_widget(bufferline_widget, area);
     }
 
-    fn render_main_editor(f: &mut ratatui::Frame, editor: &Editor, area: Rect) {
+    fn render_main_editor(f: &mut ratatui::Frame, editor: &Editor, area: Rect, status_area: Rect) {
         let horizontal_chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Length(6), Constraint::Min(0)].as_ref())
@@ -285,7 +315,7 @@ impl Tui {
         let mut line_number_lines: Vec<Line> = Vec::new();
 
         for i in start_line..end_line {
-            let line_num = i + 1;
+            let line_num = (i as i32 - editor.cursor.row as i32).abs();
             let style = if i == editor.cursor.row {
                 line_number_style
                     .fg(Color::White)
@@ -299,9 +329,7 @@ impl Tui {
             )]));
         }
 
-        let line_numbers = Paragraph::new(line_number_lines)
-            .style(Style::default().fg(Color::Gray))
-            .block(Block::default().borders(Borders::ALL));
+        let line_numbers = Paragraph::new(line_number_lines);
         f.render_widget(line_numbers, line_numbers_area);
 
         let mut text_lines: Vec<Line> = Vec::new();
@@ -313,8 +341,7 @@ impl Tui {
         let paragraph = Paragraph::new(text_lines)
             .wrap(Wrap { trim: false })
             .style(Style::default().fg(Color::Cyan))
-            .alignment(Alignment::Left)
-            .block(Block::default().borders(Borders::ALL));
+            .alignment(Alignment::Left);
         f.render_widget(paragraph, text_area);
 
         let cursor_row = editor.cursor.row.saturating_sub(editor.scroll_offset);
@@ -323,19 +350,17 @@ impl Tui {
         let area_x = text_area.x + 1;
         let area_y = text_area.y + 1;
 
-        if (editor.mode == Mode::Normal
+        if editor.mode == Mode::Command {
+            let cursor_pos = editor.command_input.len() as u16 + 2;
+            if cursor_pos + 2 < status_area.width {
+                f.set_cursor_position((status_area.x + cursor_pos, status_area.y + 1));
+            }
+        } else if (editor.mode == Mode::Normal
             || editor.mode == Mode::Insert
             || editor.mode == Mode::Visual)
             && cursor_row < (text_area.height - 2) as usize
         {
             f.set_cursor_position((area_x + cursor_col as u16, area_y + cursor_row as u16));
-        }
-
-        if editor.mode == Mode::Command {
-            let cursor_pos = editor.command_input.len() as u16 + 2;
-            if cursor_pos + 2 < text_area.width {
-                f.set_cursor_position((text_area.x + cursor_pos, text_area.y + 1));
-            }
         }
     }
 
@@ -376,6 +401,66 @@ impl Tui {
         let cursor_pos = (editor.command_input.len() + 2) as u16;
         if cursor_pos < dialog_area.width - 2 {
             f.set_cursor_position((dialog_area.x + cursor_pos, dialog_area.y + 2));
+        }
+    }
+
+    fn render_file_picker(f: &mut ratatui::Frame, editor: &Editor, area: Rect) {
+        let picker = &editor.file_picker;
+
+        let dialog_width = 60.min(area.width.saturating_sub(4));
+        let dialog_height = 20.min(area.height.saturating_sub(4));
+        let x = (area.width - dialog_width) / 2;
+        let y = (area.height - dialog_height) / 2;
+
+        let dialog_area = Rect::new(x, y, dialog_width, dialog_height);
+
+        let mut lines: Vec<Line> = Vec::new();
+        lines.push(Line::from("File Picker"));
+        lines.push(Line::from(""));
+
+        for (idx, file) in picker.files.iter().enumerate() {
+            let icon = if file.is_dir { "📁 " } else { "📄 " };
+            let style = if idx == picker.selected_idx {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Cyan)
+            };
+
+            lines.push(Line::from(vec![
+                Span::styled(icon, Style::default()),
+                Span::styled(&file.name, style),
+            ]));
+        }
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("Path: ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                picker.current_dir.display().to_string(),
+                Style::default().fg(Color::White),
+            ),
+        ]));
+
+        lines.push(Line::from(""));
+        lines.push(Line::from(
+            "Enter: select/open | Esc: cancel | j/k: navigate",
+        ));
+
+        let dialog = Paragraph::new(lines)
+            .style(Style::default().fg(Color::Cyan))
+            .block(Block::default().borders(Borders::ALL).title("Open File"));
+
+        f.render_widget(Clear, dialog_area);
+        f.render_widget(dialog, dialog_area);
+
+        if picker.selected_idx < picker.files.len() {
+            let cursor_y = dialog_area.y + 2 + picker.selected_idx as u16;
+            if cursor_y < dialog_area.bottom() - 2 {
+                f.set_cursor_position((dialog_area.x + 2, cursor_y));
+            }
         }
     }
 }
